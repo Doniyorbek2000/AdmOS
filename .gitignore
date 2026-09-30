@@ -1,0 +1,31 @@
+# Build outputs
+/target/
+/build/
+/out/
+/mkosi.output/
+/mkosi.cache/
+*.iso
+*.img
+*.raw
+*.qcow2
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Secrets must never be committed. These patterns are a safety net, not a policy.
+*.key
+*.pem
+*.p12
+*.pfx
+*.der
+.env
+.env.*
+secrets/

@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-validation:
+    name: Repository validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # Pinned by major tag; SHA pinning is tracked as TD1 in docs/RISKS_AND_DECISIONS.md.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Python version
+        run: python3 --version
+
+      - name: Byte-compile tooling
+        run: python3 -m py_compile tools/check_repo.py tools/tests/test_check_repo.py
+
+      - name: Validation tool unit tests
+        run: python3 -m unittest discover -s tools/tests -v
+
+      - name: Repository checks
+        run: python3 tools/check_repo.py
