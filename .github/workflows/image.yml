@@ -1,0 +1,91 @@
+name: image
+
+# Full Phase 1 pipeline: build the canonical Debian-based images and run the QEMU demonstrations
+# (boot, Secure Boot development path, update, automatic rollback, dm-verity integrity, TPM2).
+#
+# STATUS: implemented but not yet executed on GitHub-hosted runners (it could not be run from the
+# development sandbox). Treat the first run as a validation of this workflow itself.
+#
+# Signing: every run generates throwaway DEVELOPMENT keys on the runner (tools/nur keys init-dev).
+# No repository secret is used and nothing produced here is production-signed or publishable.
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-demo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      N: "2026.01.01.1"
+      N1: "2026.01.01.2"
+      BROKEN: "2026.01.01.3"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Host packages
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mkosi systemd-boot systemd-ukify systemd-container \
+            sbsigntool erofs-utils cryptsetup-bin dosfstools mtools kmod cpio zstd python3-pefile openssl \
+            qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools python3-virt-firmware e2fsprogs debian-archive-keyring
+
+      - name: Enable KVM for the runner user
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Development keys (throwaway, generated on the runner)
+        run: sudo -E tools/nur keys init-dev
+
+      - name: Build N, N+1 and a deliberately broken N+2 (Debian stable base)
+        run: |
+          set -euo pipefail
+          sudo -E tools/nur build --version "$N"
+          sudo -E tools/nur build --version "$N1"
+          sudo -E tools/nur build --version "$BROKEN" --fault corrupt-build-metadata
+
+      - name: Demo A - boot
+        run: sudo -E tools/nur test boot --version "$N"
+      - name: Demo B - Secure Boot development path
+        run: sudo -E tools/nur test secureboot --version "$N"
+      - name: Demo C - update N -> N+1
+        run: sudo -E tools/nur test update --from "$N" --to "$N1"
+      - name: Demo D - automatic rollback
+        run: sudo -E tools/nur test rollback --from "$N" --broken "$BROKEN"
+      - name: Demo E - dm-verity integrity
+        run: sudo -E tools/nur test integrity --version "$N"
+      - name: TPM2 / LUKS2
+        run: sudo -E tools/nur test tpm --version "$N"
+
+      - name: Collect reports (no images, no keys)
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          sudo find build/reports -name '*.json' -o -name '*.log' -o -name '*.txt' | sudo xargs -r cp --parents -t evidence
+          sudo find build/images -name 'build-record.json' -o -name '*.spdx.json' | sudo xargs -r cp --parents -t evidence
+          sudo chown -R "$(id -u)" evidence
+
+      # actions/upload-artifact v4.6.2, pinned by commit SHA.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: phase1-evidence
+          path: evidence
+          retention-days: 30

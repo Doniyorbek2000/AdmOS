@@ -1,0 +1,25 @@
+# NUR A/B /usr slot transfer (systemd-sysupdate).
+#
+# SECURITY: Verify=no is deliberate. These definitions are used only by `nurctl update install`
+# (via --definitions=/usr/lib/nur/sysupdate.d), which first verifies the Ed25519 signature of the
+# update manifest, enforces version/security-floor policy, and copies + hashes every artifact into
+# the root-only staging directory below. systemd-sysupdate only ever reads those verified copies.
+# They are intentionally NOT in /usr/lib/sysupdate.d, so the stock systemd-sysupdate timer/CLI
+# never uses them.
+[Transfer]
+ProtectVersion=%A
+Verify=no
+
+[Source]
+Type=regular-file
+Path=/var/lib/nur/update/staging
+MatchPattern=nur_@v.usr-%a.@u.raw
+
+[Target]
+Type=partition
+Path=auto
+MatchPattern=nur-usr_@v
+MatchPartitionType=usr
+PartitionFlags=0
+ReadOnly=1
+InstancesMax=2

@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""NUR initrd finalization: records the installed package inventory for the SBOM."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    root = Path(os.environ.get("BUILDROOT", ""))
+    outdir = os.environ.get("OUTPUTDIR")
+    version = os.environ.get("IMAGE_VERSION")
+    if not root.is_dir() or not outdir or not version:
+        sys.stderr.write("initrd finalize: BUILDROOT, OUTPUTDIR and IMAGE_VERSION are required\n")
+        sys.exit(1)
+    proc = subprocess.run(
+        ["dpkg-query", f"--admindir={root}/var/lib/dpkg", "--show",
+         "--showformat=${Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\n"],
+        capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        sys.stderr.write(f"initrd finalize: dpkg-query failed: {proc.stderr.strip()}\n")
+        sys.exit(1)
+    packages = []
+    for line in sorted(proc.stdout.splitlines()):
+        name, pkg_version, arch, source = line.split("\t")
+        packages.append({"name": name, "version": pkg_version, "architecture": arch, "source": source})
+    if not packages:
+        sys.stderr.write("initrd finalize: no packages recorded\n")
+        sys.exit(1)
+    (Path(outdir) / f"nur-initrd_{version}.packages.json").write_text(
+        json.dumps({"schema": "nur.packages/v1", "packages": packages}, indent=2) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

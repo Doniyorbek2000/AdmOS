@@ -20,6 +20,9 @@ __pycache__/
 *.swp
 .DS_Store
 
+# Local developer state: DEVELOPMENT signing keys (tools/nur keys init-dev). Never commit.
+/.nur/
+
 # Secrets must never be committed. These patterns are a safety net, not a policy.
 *.key
 *.pem

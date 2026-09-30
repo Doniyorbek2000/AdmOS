@@ -1,0 +1,17 @@
+[package]
+name = "nurctl"
+description = "NUR OS system control: slot status, boot health, update installation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+nur-meta.workspace = true
+nur-boot.workspace = true
+nur-update.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

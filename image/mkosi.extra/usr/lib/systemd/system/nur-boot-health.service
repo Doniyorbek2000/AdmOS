@@ -1,0 +1,43 @@
+[Unit]
+Description=NUR OS boot health assessment
+Documentation=https://github.com/Doniyorbek2000/AdmOS/blob/main/docs/UPDATE_ARCHITECTURE.md
+# Runs on every boot. While a newly installed version is under assessment, boot-complete.target
+# (and therefore systemd-bless-boot) requires this unit, so a failing check prevents the entry
+# from being marked good.
+DefaultDependencies=no
+After=local-fs.target sysinit.target sockets.target systemd-journald.service systemd-udevd.service dbus.socket
+Before=boot-complete.target shutdown.target
+Conflicts=shutdown.target
+OnFailure=nur-boot-failed.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nurctl health-check
+StandardOutput=journal+console
+StandardError=journal+console
+# Hardening: read-only system, writes only its report; no network.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/nur
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# dmsetup needs CAP_SYS_ADMIN for device-mapper status ioctls (read-only queries).
+CapabilityBoundingSet=CAP_SYS_ADMIN
+
+[Install]
+RequiredBy=boot-complete.target
+WantedBy=multi-user.target

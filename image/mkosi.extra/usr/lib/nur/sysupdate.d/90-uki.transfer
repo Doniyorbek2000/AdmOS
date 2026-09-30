@@ -1,0 +1,25 @@
+# Signed UKI for the new slot, installed last and with a boot counter (3 attempts).
+# systemd-boot decrements the counter on each attempt; the boot is blessed (counter removed) by
+# systemd-bless-boot only after boot-complete.target, which requires nur-boot-health.service.
+# If all attempts fail the entry becomes "bad" and the previous version boots.
+# See 10-usr.transfer for the Verify=no rationale.
+[Transfer]
+ProtectVersion=%A
+Verify=no
+
+[Source]
+Type=regular-file
+Path=/var/lib/nur/update/staging
+MatchPattern=nur_@v.efi
+
+[Target]
+Type=regular-file
+Path=/EFI/Linux
+PathRelativeTo=esp
+MatchPattern=nur_@v+@l-@d.efi \
+             nur_@v+@l.efi \
+             nur_@v.efi
+Mode=0444
+TriesLeft=3
+TriesDone=0
+InstancesMax=2

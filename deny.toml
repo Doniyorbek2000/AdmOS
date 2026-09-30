@@ -1,0 +1,49 @@
+# cargo-deny policy for NUR-owned Rust code. See docs/LICENSING_POLICY.md.
+# Run: cargo deny check
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+all-features = false
+
+[advisories]
+# RustSec advisories: vulnerabilities are errors; unmaintained/unsound/yanked are reported.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Category A (allowed) from docs/LICENSING_POLICY.md. Anything else fails the check and needs
+# an explicit, reviewed policy change.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "0BSD",
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+
+[licenses.private]
+# NUR crates are publish = false and their license is not yet decided (D3).
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # OpenSSL bindings are not used by NUR Rust code; TLS, if ever needed, uses rustls.
+    { name = "openssl-sys" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

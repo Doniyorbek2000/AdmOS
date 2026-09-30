@@ -67,7 +67,7 @@ TEXT_SUFFIXES = frozenset(
     {".md", ".py", ".yml", ".yaml", ".toml", ".txt", ".json", ".sh", ".rs", ".cfg", ".conf"}
 )
 TEXT_FILENAMES = frozenset({".editorconfig", ".gitattributes", ".gitignore"})
-SKIP_DIRS = frozenset({".git", "target", "build", "out", "__pycache__", ".venv", "node_modules"})
+SKIP_DIRS = frozenset({".git", "target", "build", "out", "__pycache__", ".venv", "node_modules", ".nur"})
 
 # Patterns are assembled from fragments so this file never matches itself.
 _BEGIN = "-----" + "BEGIN"
@@ -80,6 +80,8 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}")),
     ("OpenAI-style API key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9]{32,}\b")),
+    ("NUR secret signing key", re.compile(r'"secret' + r'_key"\s*:\s*"[0-9a-fA-F]{64}"')),
+    ("PEM encrypted private key", re.compile(_BEGIN + r" ENCRYPTED PRIVATE KEY-----")),
 )
 
 MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[(?P<text>[^\]]*)\]\((?P<target>[^)\s]+)(?:\s+\"[^\"]*\")?\)")

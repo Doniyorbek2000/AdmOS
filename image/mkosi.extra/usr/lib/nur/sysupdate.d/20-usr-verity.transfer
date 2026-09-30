@@ -1,0 +1,18 @@
+# dm-verity hash tree for the /usr slot. See 10-usr.transfer for the Verify=no rationale.
+[Transfer]
+ProtectVersion=%A
+Verify=no
+
+[Source]
+Type=regular-file
+Path=/var/lib/nur/update/staging
+MatchPattern=nur_@v.usr-%a-verity.@u.raw
+
+[Target]
+Type=partition
+Path=auto
+MatchPattern=nur-usr-verity_@v
+MatchPartitionType=usr-verity
+PartitionFlags=0
+ReadOnly=1
+InstancesMax=2

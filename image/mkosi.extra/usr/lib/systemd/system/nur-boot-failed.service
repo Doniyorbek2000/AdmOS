@@ -1,0 +1,12 @@
+[Unit]
+Description=NUR OS boot health failure handler
+# Started via OnFailure= of nur-boot-health.service. While the booted entry is under assessment
+# it reboots so the failed attempt is counted (automatic fallback after the attempts are used);
+# for a blessed entry it only reports, to avoid reboot loops on known-good systems.
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nurctl boot-failed
+StandardOutput=journal+console
+StandardError=journal+console

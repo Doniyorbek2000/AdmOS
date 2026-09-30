@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""NUR image finalization (runs on the build host after package installation, before the /usr
+image, its dm-verity hash tree and the UKI are generated).
+
+Responsibilities:
+  1. NUR product identity: /usr/lib/os-release describes NUR OS; the base distribution's
+     os-release is preserved verbatim as provenance in /usr/lib/nur/upstream-os-release.
+  2. Machine-readable build metadata: /usr/lib/nur/build.json (schema nur.build/v1).
+  3. Hermetic /usr: everything the OS needs must live in /usr, because only /usr is shipped in
+     the verified A/B image. Concretely:
+       * accounts from the base's /etc/passwd and /etc/group are declared via sysusers.d;
+       * unit enablement/drop-ins from /etc/systemd are moved into /usr/lib/systemd;
+       * the remaining /etc becomes factory defaults in /usr/share/factory/etc, copied into the
+         (encrypted) state partition by systemd-tmpfiles on first boot.
+
+All inputs come from environment variables set by `tools/nur build`; missing inputs abort the
+build. Any fault injection requested for negative tests is applied here and recorded.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+SCHEMA = "nur.build/v1"
+VERSION_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}\.\d{1,4}$")
+REQUIRED_ENV = (
+    "NUR_BUILD_VERSION",
+    "NUR_SECURITY_FLOOR",
+    "NUR_CHANNEL",
+    "NUR_PROFILE",
+    "NUR_BASE_ID",
+    "NUR_BASE_RELEASE",
+    "NUR_GIT_COMMIT",
+    "NUR_GIT_DIRTY",
+    "NUR_FAULT",
+    "SOURCE_DATE_EPOCH",
+)
+ALLOWED_FAULTS = ("none", "corrupt-build-metadata")
+# Account databases are regenerated from sysusers.d on first boot and must not be copied.
+ETC_NOT_COPIED = frozenset(
+    {"passwd", "passwd-", "group", "group-", "shadow", "shadow-", "gshadow", "gshadow-",
+     "subuid", "subuid-", "subgid", "subgid-", "machine-id", "systemd", ".pwd.lock"}
+)
+
+
+def die(message: str) -> None:
+    sys.stderr.write(f"mkosi.finalize: error: {message}\n")
+    sys.exit(1)
+
+
+def env() -> dict[str, str]:
+    values = {}
+    for name in REQUIRED_ENV:
+        value = os.environ.get(name)
+        if value is None or value == "":
+            die(f"required environment variable {name} is not set (use tools/nur build)")
+        values[name] = value
+    for name in ("NUR_BUILD_VERSION", "NUR_SECURITY_FLOOR"):
+        if not VERSION_RE.match(values[name]):
+            die(f"{name}={values[name]!r} is not a build version (YYYY.MM.DD.N)")
+    if values["NUR_FAULT"] not in ALLOWED_FAULTS:
+        die(f"unknown fault injection {values['NUR_FAULT']!r}")
+    if values["NUR_PROFILE"] not in ("dev", "release"):
+        die(f"unknown profile {values['NUR_PROFILE']!r}")
+    return values
+
+
+def os_release_quote(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9 ._:()/+-]*", value):
+        die(f"refusing to write unsafe os-release value {value!r}")
+    return f'"{value}"'
+
+
+def write_identity(root: Path, v: dict[str, str]) -> None:
+    usr_lib = root / "usr/lib"
+    upstream = usr_lib / "os-release"
+    if not upstream.is_file():
+        die("base image has no /usr/lib/os-release")
+    nur_dir = usr_lib / "nur"
+    nur_dir.mkdir(parents=True, exist_ok=True)
+    provenance = nur_dir / "upstream-os-release"
+    if not provenance.exists():
+        shutil.copyfile(upstream, provenance)
+
+    fields = [
+        ("NAME", os_release_quote("NUR OS")),
+        ("ID", "nur"),
+        ("ID_LIKE", "debian"),
+        ("PRETTY_NAME", os_release_quote("NUR OS Developer Preview (Phase 1)")),
+        ("VERSION", os_release_quote(f"Developer Preview Phase 1 ({v['NUR_BUILD_VERSION']})")),
+        ("VARIANT", os_release_quote("Developer Preview")),
+        ("VARIANT_ID", "developer-preview"),
+        ("IMAGE_ID", "nur"),
+        ("IMAGE_VERSION", v["NUR_BUILD_VERSION"]),
+        ("NUR_CHANNEL", v["NUR_CHANNEL"]),
+        ("NUR_PROFILE", v["NUR_PROFILE"]),
+        ("NUR_BASE_ID", v["NUR_BASE_ID"]),
+        ("NUR_BASE_RELEASE", v["NUR_BASE_RELEASE"]),
+    ]
+    upstream.unlink()
+    upstream.write_text("".join(f"{k}={val}\n" for k, val in fields), encoding="utf-8")
+    upstream.chmod(0o644)
+
+
+def kernel_version(root: Path) -> str:
+    versions = sorted(p.name for p in (root / "usr/lib/modules").iterdir() if p.is_dir())
+    if len(versions) != 1:
+        die(f"expected exactly one kernel in the image, found {versions}")
+    return versions[0]
+
+
+def write_build_metadata(root: Path, v: dict[str, str]) -> str:
+    """Writes /usr/lib/nur/build.json (corrupted if requested) and returns the intact text."""
+    metadata = {
+        "schema": SCHEMA,
+        "product": "NUR OS",
+        "stage": "developer-preview",
+        "phase": 1,
+        "build_id": v["NUR_BUILD_VERSION"],
+        "version": v["NUR_BUILD_VERSION"],
+        "security_floor": v["NUR_SECURITY_FLOOR"],
+        "channel": v["NUR_CHANNEL"],
+        "profile": v["NUR_PROFILE"],
+        "architecture": os.environ.get("ARCHITECTURE", "x86-64"),
+        "base": {"id": v["NUR_BASE_ID"], "release": v["NUR_BASE_RELEASE"]},
+        "kernel": kernel_version(root),
+        "source": {"git_commit": v["NUR_GIT_COMMIT"], "git_dirty": v["NUR_GIT_DIRTY"] == "1"},
+        "created_epoch": int(v["SOURCE_DATE_EPOCH"]),
+        # The /usr image digest cannot be stored inside /usr itself. It is the dm-verity root
+        # hash, carried in the signed UKI command line (usrhash=) and in the update manifest.
+        "image_digest": {"algorithm": "dm-verity-sha256", "location": "kernel-cmdline:usrhash"},
+    }
+    intact = json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+    text = intact
+    if v["NUR_FAULT"] == "corrupt-build-metadata":
+        # Deliberately broken build for rollback tests: metadata is truncated mid-document.
+        text = text[: len(text) // 2]
+    target = root / "usr/lib/nur/build.json"
+    target.write_text(text, encoding="utf-8")
+    target.chmod(0o644)
+    return intact
+
+
+def parse_colon_db(path: Path, fields: int) -> list[list[str]]:
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(":")
+        if len(parts) != fields:
+            die(f"malformed line in {path}: {line!r}")
+        rows.append(parts)
+    return rows
+
+
+def write_sysusers(root: Path) -> None:
+    etc = root / "etc"
+    groups = parse_colon_db(etc / "group", 4)
+    users = parse_colon_db(etc / "passwd", 7)
+    lines = [
+        "# Generated by image/mkosi.finalize from the base image's account databases.",
+        "# Accounts are declared here so that an empty /etc (first boot, factory reset) is",
+        "# populated with identical numeric IDs by systemd-sysusers.",
+    ]
+    for name, _pw, gid, _members in groups:
+        lines.append(f"g {name} {gid}")
+    primary = {int(g[2]): g[0] for g in groups}
+    for name, _pw, uid, gid, gecos, home, shell in users:
+        if int(gid) not in primary:
+            die(f"user {name} has unknown primary gid {gid}")
+        gecos_field = f'"{gecos}"' if gecos else "-"
+        if '"' in gecos:
+            die(f"unsupported character in GECOS of {name}")
+        lines.append(f"u {name} {uid}:{gid} {gecos_field} {home or '-'} {shell or '-'}")
+    for name, _pw, _gid, members in groups:
+        for member in filter(None, members.split(",")):
+            lines.append(f"m {member} {name}")
+    out = root / "usr/lib/sysusers.d/00-nur-base-accounts.conf"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def link_destination(link: Path) -> str:
+    """Resolve a symlink's target lexically, by file name only (both /etc/systemd/system and
+    /usr/lib/systemd/system aliases point at units found through the unit search path)."""
+    return Path(os.readlink(link)).name
+
+
+def merge_tree(src: Path, dst: Path) -> None:
+    """Move src into dst. Identical entries are dropped; conflicting entries abort the build."""
+    for entry in sorted(src.iterdir()):
+        target = dst / entry.name
+        if entry.is_dir() and not entry.is_symlink():
+            target.mkdir(parents=True, exist_ok=True)
+            merge_tree(entry, target)
+            entry.rmdir()
+            continue
+        if entry.is_symlink() and os.readlink(entry) == "/dev/null" and not target.is_dir():
+            # A mask in /etc becomes a mask in /usr: the vendor unit is replaced by the mask.
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            os.rename(entry, target)
+            continue
+        if target.exists() or target.is_symlink():
+            same_link = entry.is_symlink() and target.is_symlink() and \
+                link_destination(entry) == link_destination(target)
+            same_file = not entry.is_symlink() and not target.is_symlink() and \
+                entry.read_bytes() == target.read_bytes()
+            if not (same_link or same_file):
+                die(f"cannot move {entry} into /usr: conflicting {target}")
+            entry.unlink()
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(entry, target)
+
+
+def hermetic_usr(root: Path) -> None:
+    etc = root / "etc"
+    for sub in ("system", "user"):
+        src = etc / "systemd" / sub
+        if src.is_dir():
+            merge_tree(src, root / "usr/lib/systemd" / sub)
+            src.rmdir()
+
+    factory = root / "usr/share/factory/etc"
+    factory.mkdir(parents=True, exist_ok=True)
+    tmpfiles = [
+        "# Generated by image/mkosi.finalize. Copies factory defaults into /etc when absent",
+        "# (first boot and after factory reset). Existing local configuration is never overwritten.",
+    ]
+    for entry in sorted(etc.iterdir()):
+        if entry.name in ETC_NOT_COPIED:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+            continue
+        os.rename(entry, factory / entry.name)
+        tmpfiles.append(f"C /etc/{entry.name} - - - -")
+    (root / "usr/lib/tmpfiles.d").mkdir(parents=True, exist_ok=True)
+    (root / "usr/lib/tmpfiles.d/00-nur-factory-etc.conf").write_text(
+        "\n".join(tmpfiles) + "\n", encoding="utf-8"
+    )
+
+
+def write_login_identity(root: Path, v: dict[str, str]) -> None:
+    """Hostname and login banners in /etc (become factory defaults). The base distribution's
+    licensing notice is kept in spirit: the banner points to the per-package copyright files."""
+    etc = root / "etc"
+    (etc / "hostname").write_text("nur\n", encoding="utf-8")
+    base = f"{v['NUR_BASE_ID']}:{v['NUR_BASE_RELEASE']}"
+    banner = "NUR OS Developer Preview (Phase 1) - NOT FOR PRODUCTION USE\n"
+    (etc / "issue").write_text(banner + "\\n \\l\n\n", encoding="utf-8")
+    (etc / "issue.net").write_text(banner, encoding="utf-8")
+    (etc / "motd").write_text(
+        banner
+        + f"Build {v['NUR_BUILD_VERSION']} ({v['NUR_CHANNEL']} channel, {v['NUR_PROFILE']} profile).\n"
+        + f"Composed from {base} packages. NUR OS includes free software; the license terms of each\n"
+        + "component are in /usr/share/doc/*/copyright. Provenance: /usr/lib/nur/upstream-os-release.\n",
+        encoding="utf-8",
+    )
+    # Distribution-branded dynamic MOTD fragments are replaced by the static NUR motd above.
+    shutil.rmtree(etc / "update-motd.d", ignore_errors=True)
+
+
+def export_build_metadata(intact: str, v: dict[str, str]) -> None:
+    """Writes the intact build metadata next to the build outputs for host tooling (also for
+    fault-injected builds, whose in-image copy is deliberately corrupted)."""
+    outdir = os.environ.get("OUTPUTDIR")
+    if not outdir:
+        die("OUTPUTDIR is not set")
+    (Path(outdir) / f"nur_{v['NUR_BUILD_VERSION']}.build.json").write_text(intact, encoding="utf-8")
+
+
+def export_package_inventory(root: Path, name: str) -> None:
+    """Records installed base packages (input for the SPDX SBOM) next to the build outputs."""
+    outdir = os.environ.get("OUTPUTDIR")
+    if not outdir:
+        die("OUTPUTDIR is not set")
+    proc = subprocess.run(
+        ["dpkg-query", f"--admindir={root}/var/lib/dpkg", "--show",
+         "--showformat=${Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\n"],
+        capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        die(f"dpkg-query failed: {proc.stderr.strip()}")
+    packages = []
+    for line in sorted(proc.stdout.splitlines()):
+        pkg, version, arch, source = line.split("\t")
+        packages.append({"name": pkg, "version": version, "architecture": arch, "source": source})
+    if not packages:
+        die("no installed packages recorded")
+    (Path(outdir) / f"{name}.packages.json").write_text(
+        json.dumps({"schema": "nur.packages/v1", "packages": packages}, indent=2) + "\n", encoding="utf-8")
+
+
+def audit_kernel_config(root: Path, v: dict[str, str]) -> None:
+    """Checks the kernel build configuration against image/kernel/policy.json. Missing required
+    options abort the build; recommended deviations are recorded for review."""
+    srcdir = Path(os.environ.get("SRCDIR", ""))
+    policy_file = srcdir / "kernel" / "policy.json"
+    if not policy_file.is_file():
+        die(f"kernel policy not found at {policy_file}")
+    policy = json.loads(policy_file.read_text(encoding="utf-8"))
+    kver = kernel_version(root)
+    candidates = [root / f"boot/config-{kver}", root / f"usr/lib/modules/{kver}/config"]
+    config_file = next((c for c in candidates if c.is_file()), None)
+    if config_file is None:
+        die(f"kernel build configuration for {kver} not found; cannot audit kernel policy")
+    config: dict[str, str] = {}
+    for line in config_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            config[key] = value
+    def status(options: dict[str, list[str]]) -> dict[str, dict[str, object]]:
+        return {k: {"value": config.get(k, "not set"), "ok": config.get(k) in allowed}
+                for k, allowed in options.items()}
+    required = status(policy["required"])
+    recommended = status(policy["recommended"])
+    forbidden = {k: config.get(k, "not set") for k in policy["forbidden_in_release"]}
+    report = {"schema": "nur.kernel-audit/v1", "kernel": kver, "lsm": config.get("CONFIG_LSM"),
+              "required": required, "recommended": recommended, "forbidden_in_release": forbidden}
+    outdir = os.environ.get("OUTPUTDIR")
+    if not outdir:
+        die("OUTPUTDIR is not set")
+    (Path(outdir) / f"nur_{v['NUR_BUILD_VERSION']}.kernel-audit.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    missing = [k for k, s in required.items() if not s["ok"]]
+    if missing:
+        die(f"kernel {kver} violates NUR kernel policy (required options missing): {', '.join(missing)}")
+
+
+def main() -> None:
+    root = Path(os.environ.get("BUILDROOT", ""))
+    if not root.is_dir() or not (root / "usr").is_dir():
+        die("BUILDROOT is not an image root")
+    values = env()
+    write_identity(root, values)
+    audit_kernel_config(root, values)
+    export_package_inventory(root, f"nur_{values['NUR_BUILD_VERSION']}")
+    intact_metadata = write_build_metadata(root, values)
+    export_build_metadata(intact_metadata, values)
+    write_login_identity(root, values)
+    write_sysusers(root)
+    hermetic_usr(root)
+    print(f"mkosi.finalize: NUR build {values['NUR_BUILD_VERSION']} finalized "
+          f"(base {values['NUR_BASE_ID']}:{values['NUR_BASE_RELEASE']}, fault={values['NUR_FAULT']})")
+
+
+if __name__ == "__main__":
+    main()

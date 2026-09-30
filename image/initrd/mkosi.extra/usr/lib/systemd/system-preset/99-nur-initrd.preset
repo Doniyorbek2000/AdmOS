@@ -1,0 +1,2 @@
+# Only units explicitly wanted by initrd targets run in the NUR initrd.
+disable *

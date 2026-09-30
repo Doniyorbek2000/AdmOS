@@ -1,0 +1,42 @@
+# NUR-owned Rust components. See crates/README.md and docs/adr/0007-memory-safe-languages.md.
+[workspace]
+resolver = "2"
+members = [
+    "crates/nur-meta",
+    "crates/nur-boot",
+    "crates/nur-update",
+    "crates/nurctl",
+    "crates/nur-bundle",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+# Project license not yet decided (docs/RISKS_AND_DECISIONS.md, D3). Crates are never published.
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1.0", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "zeroize"] }
+nur-meta = { path = "crates/nur-meta" }
+nur-boot = { path = "crates/nur-boot" }
+nur-update = { path = "crates/nur-update" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"

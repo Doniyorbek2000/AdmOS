@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Derived from dracut 059 modules.d/90dm/11-dm.rules (GPL-2.0-only), as also shipped by mkosi.
+# Keeps the udev database of device-mapper devices (/dev/mapper/usr, /dev/mapper/root) across
+# the switch from initrd to the real root.
+
+SUBSYSTEM!="block", GOTO="dm_end"
+KERNEL!="dm-[0-9]*", GOTO="dm_end"
+ACTION!="add|change", GOTO="dm_end"
+OPTIONS+="db_persist"
+LABEL="dm_end"

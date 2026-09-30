@@ -34,7 +34,7 @@ in [../RISKS_AND_DECISIONS.md](../RISKS_AND_DECISIONS.md).
 | [0000](0000-record-architecture-decisions.md) | Record architecture decisions | DECIDED |
 | [0001](0001-linux-lts-kernel-foundation.md) | Linux LTS kernel as the hardware foundation | DECIDED |
 | [0002](0002-x86-64-first-arm64-ready.md) | x86-64 first, ARM64-ready | DECIDED |
-| [0003](0003-base-userspace-and-image-build.md) | Base userspace source and image build tooling | RESEARCH REQUIRED |
+| [0003](0003-base-userspace-and-image-build.md) | Base userspace source and image build tooling | DECIDED |
 | [0004](0004-wayland-first-desktop.md) | Wayland-first desktop | DECIDED |
 | [0005](0005-compositor-foundation.md) | Compositor foundation: Smithay-based NUR compositor | PROPOSED |
 | [0006](0006-ui-toolkit.md) | UI toolkit for first-party interfaces | RESEARCH REQUIRED |
@@ -47,3 +47,6 @@ in [../RISKS_AND_DECISIONS.md](../RISKS_AND_DECISIONS.md).
 | [0013](0013-platform-ipc.md) | D-Bus as the platform API transport | PROPOSED |
 | [0014](0014-office-suite-foundation.md) | NUR Office foundation | RESEARCH REQUIRED |
 | [0015](0015-mandatory-access-control.md) | Mandatory access control system | RESEARCH REQUIRED |
+| [0016](0016-secure-boot-development-signing.md) | Secure Boot development signing path | DECIDED |
+| [0017](0017-hermetic-usr-and-encrypted-state.md) | Hermetic /usr image and first-boot encrypted state partition | PROPOSED |
+| [0018](0018-phase1-update-trust.md) | Phase 1 update trust — signed manifest, verified staging, systemd-sysupdate | PROPOSED |
